@@ -1,0 +1,5 @@
+# Give the RODECaster Video's USB network link (CDC-NCM, secondary USB port)
+# a stable name so the "RODECaster Video" NetworkManager connection can bind to
+# it. Must sort after the rules that import ID_USB_DRIVER / ID_VENDOR_ID and
+# before 80-net-setup-link.rules.
+SUBSYSTEM=="net", ACTION=="add", ENV{ID_USB_DRIVER}=="cdc_ncm", ENV{ID_VENDOR_ID}=="19f7", NAME="usbncm0"

@@ -1,0 +1,4 @@
+# Let the logged-in user open RØDE USB devices (Wine enumerates them for the
+# RODECaster App).
+SUBSYSTEM=="usb", ATTRS{idVendor}=="19f7", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="19f7", MODE="0660", TAG+="uaccess"

@@ -1,0 +1,6 @@
+# Never commit RØDE's software or anything extracted from it.
+*.zip
+*.msi
+*.exe
+*.dll
+*.cab

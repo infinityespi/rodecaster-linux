@@ -1,0 +1,76 @@
+#!/bin/bash
+# Launch the RØDECaster App (Windows build) under Wine.
+#
+# Under Wine the app can't see the RODECaster Video as a USB device: it looks
+# for a USB interface described as "UsbNcm Host Device" and reads the serial
+# from the parent device ID (USB\VID_19F7&PID_006D\<serial>). Wine provides
+# neither, so before each launch we write both into the prefix's device
+# registry for every RCV NCM interface Wine has enumerated.
+
+DATA_DIR="${RODECASTER_LINUX_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/rodecaster-linux}"
+CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/rodecaster-linux/config"
+
+# Defaults; override in $CONFIG.
+SCALE=100            # UI scale in percent (100, 125, 150, 175, 200 ...)
+VIRTUAL_DESKTOP=0    # 1 = run inside one resizable Wine virtual desktop window
+DESKTOP_SIZE=1920x1080
+# shellcheck source=/dev/null
+[ -f "$CONFIG" ] && . "$CONFIG"
+
+export WINEPREFIX="$DATA_DIR/prefix"
+export WINEDEBUG="${WINEDEBUG:--all}"
+export WINEDLLOVERRIDES="winemenubuilder.exe=d"
+APP_DIR="$DATA_DIR/app"
+
+if [ ! -x "$(command -v wine)" ] || [ ! -f "$APP_DIR/RODECasterApp.exe" ]; then
+    echo "rodecaster-app: not installed (missing wine or $APP_DIR) - run install.sh" >&2
+    exit 1
+fi
+
+# Serial straight from the device; skip the fix if no RCV is on the secondary port.
+SERIAL=""
+for d in /sys/bus/usb/devices/*; do
+    if [ "$(cat "$d/idVendor" 2>/dev/null)" = "19f7" ] && [ "$(cat "$d/idProduct" 2>/dev/null)" = "006d" ]; then
+        # The RCV's USB serial descriptor carries a trailing space; the network
+        # announcement (which the app matches against) does not.
+        SERIAL=$(tr -d '[:space:]' < "$d/serial" 2>/dev/null)
+    fi
+done
+
+if [ -n "$SERIAL" ]; then
+    ENUM='HKLM\System\CurrentControlSet\Enum\USB\VID_19F7&PID_006D&MI_00'
+    # Starting Wine enumerates USB devices; then list the RCV interface instances.
+    # (reg prints keys as HKEY_LOCAL_MACHINE\..., so match on the device part.)
+    instances=$(wine reg query "$ENUM" 2>/dev/null | tr -d '\r' | grep -F 'VID_19F7&PID_006D&MI_00\' | sed 's/.*\\//')
+    REG=$(mktemp --suffix=.reg)
+    python3 -I - "$SERIAL" $instances > "$REG" <<'EOF'
+import sys
+serial, insts = sys.argv[1], sys.argv[2:]
+val = ("USB\\VID_19F7&PID_006D\\" + serial + "\0").encode("utf-16-le")
+hexs = ",".join(f"{b:02x}" for b in val)
+out = ["REGEDIT4", ""]
+for i in insts:
+    base = rf"HKEY_LOCAL_MACHINE\System\CurrentControlSet\Enum\USB\VID_19F7&PID_006D&MI_00\{i}"
+    out += [f"[{base}]", '"DeviceDesc"="UsbNcm Host Device"', ""]
+    # DEVPKEY_Device_Parent, stored with type DEVPROP_TYPE_STRING (0x12)
+    out += [f"[{base}\\Properties\\{{4340a6c5-93fa-4706-972c-7b648008a5a7}}\\0008]", f"@=hex(ffff0012):{hexs}", ""]
+print("\r\n".join(out))
+EOF
+    wine regedit /S "$REG"
+    rm -f "$REG"
+fi
+
+# Wine reads the DPI from the per-user key for normal windows and from the
+# hardware-profile key inside a virtual desktop.
+DPI=$(( 96 * SCALE / 100 ))
+wine reg add 'HKCU\Control Panel\Desktop' /v LogPixels /t REG_DWORD /d "$DPI" /f >/dev/null
+wine reg add 'HKLM\System\CurrentControlSet\Hardware Profiles\Current\Software\Fonts' \
+    /v LogPixels /t REG_DWORD /d "$DPI" /f >/dev/null
+
+python3 -I "$DATA_DIR/lib/patch_vblank.py" "$APP_DIR/RODECasterApp.exe" >/dev/null || exit 1
+
+cd "$APP_DIR" || exit 1
+if [ "$VIRTUAL_DESKTOP" = 1 ]; then
+    exec wine explorer /desktop=RODECaster,"$DESKTOP_SIZE" ./RODECasterApp.exe "$@"
+fi
+exec wine ./RODECasterApp.exe "$@"
